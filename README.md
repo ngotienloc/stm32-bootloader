@@ -18,12 +18,12 @@ A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM
 - [5. UART Communication & Flashing Protocol (Packet CRC + ACK/NACK)](#5-uart-communication--flashing-protocol-packet-crc--acknack)
   - [5.1 Protocol Design Rationale: Raw vs. Protected Framing](#51-protocol-design-rationale-raw-transmission-vs-protected-framing)
   - [5.2 Packet Structure & Framing Format](#52-packet-structure--framing-format)
-  - [5.3 Transmission Flow & ACK/NACK Auto-Retry Mechanism](#53-quy-trình-gửinhận-ack--nack--auto-retry-mechanism)
+  - [5.3 Transmission Flow & ACK/NACK Auto-Retry Mechanism](#53-transmission-flow--acknack-auto-retry-mechanism)
   - [5.4 Command Set](#54-command-set)
-  - [5.5 Engineering Highlights & Interview Value](#55-điểm-cộng-kỹ-thuật--giá-trị-thực-tế-khi-phỏng-vấn-interview-value)
+  - [5.5 Engineering Highlights & Interview Value](#55-engineering-highlights--interview-value)
 - [6. Fail-Safe & Anti-Bricking Mechanisms](#6-fail-safe--anti-bricking-mechanisms)
-  - [6.1 Fail-Safe Rollback & Pre-Verification (Option B)](#61-cơ-chế-fail-safe-rollback--pre-verification-luồng-option-b)
-  - [6.2 Additional Safety Guards](#62-lớp-bảo-vệ-bổ-sung)
+  - [6.1 Fail-Safe Rollback & Pre-Verification (Option B)](#61-fail-safe-rollback--pre-verification-flow-option-b)
+  - [6.2 Additional Safety Guards](#62-additional-safety-guards)
 - [7. Directory Structure](#7-directory-structure)
 - [8. Getting Started & Build Guide](#8-getting-started--build-guide)
 - [9. Testing & Verification](#9-testing--verification)
@@ -158,14 +158,14 @@ Before transferring execution to the user application, the bootloader performs a
 
 ### 5.1 Protocol Design Rationale: Raw Transmission vs. Protected Framing
 
-#### Vấn đề của cách làm đơn giản (Không có cơ chế bảo vệ)
-Khi thiết kế bootloader UART cơ bản, nhiều dự án chọn giải pháp đơn giản là stream raw file `.bin` trực tiếp theo kiểu "đọc byte nào, ghi flash byte đó". Tuy nhiên, trong môi trường thực tế, cách làm này tiềm ẩn rủi ro nghiêm trọng:
-1. **Nhiễu điện (EMI) & Mất đồng bộ byte:** Tín hiệu UART qua dây dẫn dễ bị nhiễu làm rớt 1–2 byte hoặc đảo bit. STM32 không phát hiện được sẽ ghi dữ liệu sai vào Flash $\rightarrow$ thiết bị bị brick ngay khi khởi động.
-2. **Không có cơ chế phản hồi (Zero Feedback):** Bên gửi (ESP32/PC) không thể biết STM32 đã nhận đủ và đúng dữ liệu chưa, hay bộ đệm UART đã bị tràn (overflow).
-3. **Không thể khôi phục từng phần:** Nếu quá trình truyền bị gián đoạn giữa chừng, hệ thống không biết lỗi xảy ra ở vị trí byte nào để truyền lại, buộc phải xóa và nạp lại toàn bộ từ đầu.
+#### The Problem with Naive Raw Transmission (No Protection)
+In basic UART bootloader implementations, streaming raw `.bin` bytes directly ("read byte, write byte") introduces critical reliability issues:
+1. **EMI / Electrical Noise:** UART lines are susceptible to electrical interference, causing dropped or flipped bytes $\rightarrow$ STM32 silently writes corrupt data to Flash, bricking the device on boot.
+2. **Zero Feedback:** The transmitter (ESP32/PC) cannot verify whether the STM32 received all bytes correctly or suffered buffer overrun.
+3. **No Granular Recovery:** If transmission fails midway, the system cannot identify where the fault occurred, forcing a complete restart from byte 0.
 
-#### Cách làm chuẩn công nghiệp — Chia nhỏ thành Packet có "Khung bảo vệ"
-Thay vì gửi cả file nhị phân trong một lần, firmware được chia nhỏ thành từng gói (ví dụ **256 bytes / gói**), mỗi gói được đóng khung bảo vệ toàn diện:
+#### Industry Standard Solution — Framed Packets with Protection
+Instead of streaming an entire binary at once, firmware is split into small packets (e.g., **256 bytes / packet**), each protected by a structured frame:
 
 ```
 [START_BYTE] [Packet_ID / CMD] [Length] [Data Payload...] [CRC32 / CRC16] [END_BYTE]
@@ -182,36 +182,34 @@ Thay vì gửi cả file nhị phân trong một lần, firmware được chia n
 +---------------+---------------+---------------+---------------+---------------+---------------+
 ```
 
-- **Header (`0xAA 0x55` / `START_BYTE`):** 2 byte đồng bộ cố định để nhận diện điểm bắt đầu của một gói tin mới.
-- **Packet_ID / Command (`1 Byte`):** Mã định danh lệnh hoặc số thứ tự gói (ví dụ `0x03` = `CMD_WRITE_DATA`).
-- **Length (`2 Bytes`, Big-Endian):** Độ dài thực của trường Payload ($0 \le N \le 1024$ bytes, mặc định 256 bytes/gói).
-- **Payload (`N Bytes`):** Địa chỉ Flash Offset (4 bytes) + Dữ liệu nhị phân cần ghi vào Flash.
-- **CRC Checksum (`CRC16-CCITT` / `CRC32`):** Tính toán từ dữ liệu `[Command + Length + Payload]` để phát hiện mọi sai lệch bit do nhiễu.
-- **Tail (`0x0D` / `END_BYTE`):** Ký tự kết thúc khung truyền (`\r`).
+- **Header (`0xAA 0x55` / `START_BYTE`):** 2 synchronization bytes identifying frame start.
+- **Packet_ID / Command (`1 Byte`):** Operation command code (e.g. `0x03` = `CMD_WRITE_DATA`).
+- **Length (`2 Bytes`, Big-Endian):** Size of the payload field ($0 \le N \le 1024$ bytes, default 256B/packet).
+- **Payload (`N Bytes`):** Target Flash memory offset (4B) + raw binary chunk.
+- **CRC Checksum (`CRC16-CCITT` / `CRC32`):** Computed over `[Command + Length + Payload]` for bit error detection.
+- **Tail (`0x0D` / `END_BYTE`):** Frame delimiter (`\r`).
 
 ---
 
-### 5.3 Quy trình gửi/nhận (ACK / NACK & Auto-Retry Mechanism)
+### 5.3 Transmission Flow & ACK/NACK Auto-Retry Mechanism
 
-Giao tiếp giữa ESP32 (Sender/Gateway) và STM32 (Receiver/Bootloader) tuân thủ quy trình bắt tay đồng bộ nghiêm ngặt:
+Communication between ESP32 (Sender) and STM32 (Receiver) follows a strict synchronous handshake:
 
-1. **ESP32 gửi packet số $N$:** Đóng gói 256 bytes dữ liệu kèm mã CRC tính từ nội dung dữ liệu.
-2. **STM32 tiếp nhận & kiểm tra tính toàn vẹn:** 
-   - STM32 nhận đủ frame, tự tính toán lại mã CRC trên vùng dữ liệu vừa nhận được.
-   - So sánh mã CRC vừa tính với trường CRC đính kèm trong packet.
-3. **Trường hợp 1 — Dữ liệu khớp (Integrity OK):**
-   - STM32 ghi dữ liệu 256 bytes vào trang Flash tương ứng.
-   - STM32 phản hồi tín hiệu **`ACK`** (`0x06` hoặc `RESP_WRITE_ACK 0x00`).
-   - ESP32 nhận được ACK sẽ chuyển sang gửi packet tiếp theo ($N+1$).
-4. **Trường hợp 2 — Dữ liệu lỗi do nhiễu (CRC Mismatch):**
-   - STM32 hủy bỏ gói tin, không ghi vào Flash để tránh làm hỏng bộ nhớ.
-   - STM32 phản hồi tín hiệu **`NACK`** (`0x15` hoặc `RESP_WRITE_ACK 0x01`).
-   - ESP32 nhận NACK sẽ **gửi lại đúng packet số $N$ đó** (chỉ tốn thêm thời gian gửi 1 gói, không cần nạp lại từ đầu).
-5. **Trường hợp 3 — Mất gói hoặc Timeout:**
-   - Nếu sau khoảng thời gian $X$ ms (Timeout, mặc định 500 ms) mà ESP32 không nhận được cả `ACK` lẫn `NACK`, ESP32 sẽ **tự động gửi lại packet đó**.
-   - ESP32 cho phép thử lại tối đa **3 lần**. Nếu sau 3 lần vẫn timeout hoặc lỗi liên tục, quá trình nạp sẽ dừng an toàn và thông báo lỗi.
+1. **ESP32 transmits Packet $N$:** Chunks 256 bytes with payload CRC.
+2. **STM32 validates packet:** Computes CRC over received payload and compares with the frame's CRC field.
+3. **Case 1 — CRC Match (Integrity OK):**
+   - STM32 writes 256 bytes to Flash.
+   - STM32 replies with **`ACK`** (`0x06` / `RESP_WRITE_ACK 0x00`).
+   - ESP32 proceeds to transmit Packet $N+1$.
+4. **Case 2 — CRC Mismatch (Noise Detected):**
+   - STM32 discards the packet (no flash write).
+   - STM32 replies with **`NACK`** (`0x15` / `RESP_WRITE_ACK 0x01`).
+   - ESP32 **retransmits only Packet $N$** (no full restart needed).
+5. **Case 3 — Lost Packet / Timeout:**
+   - If ESP32 receives no response within $X$ ms (default 500 ms timeout), it automatically retransmits Packet $N$.
+   - Retries up to **3 times** before aborting and reporting a fatal error.
 
-#### Sơ đồ trình tự truyền nhận & xử lý lỗi (Sequence Flow)
+#### Sequence Flow Diagram
 
 ```mermaid
 sequenceDiagram
@@ -219,25 +217,25 @@ sequenceDiagram
     participant G as ESP32 Gateway (Sender)
     participant T as STM32 Target (Receiver)
 
-    Note over G,T: [Gói 1: Truyền thành công - ACK]
+    Note over G,T: [Packet 1: Normal Transfer - ACK]
     G->>T: Packet #1 [Offset 0x0000, Data 256B, CRC]
-    Note over T: Tự tính CRC == CRC trong gói (Khớp!)<br/>Ghi Flash 256B thành công
+    Note over T: Calc CRC == Packet CRC (Match!)<br/>Flash Write OK
     T-->>G: ACK (0x06 / RESP_WRITE_ACK OK)
 
-    Note over G,T: [Gói 2: Bị nhiễu đường truyền - NACK]
+    Note over G,T: [Packet 2: Line Noise Detected - NACK]
     G->>T: Packet #2 [Offset 0x0100, Data 256B, CRC]
-    Note over T: Nhiễu điện! Tự tính CRC != CRC trong gói
+    Note over T: Noise detected! Calc CRC != Packet CRC
     T-->>G: NACK (0x15 / RESP_WRITE_ACK CRC_ERROR)
-    Note over G: Nhận NACK -> Gửi lại ĐÚNG Packet #2
+    Note over G: Received NACK -> Resend ONLY Packet #2
     G->>T: Packet #2 [Offset 0x0100, Data 256B, CRC] (Retry 1)
-    Note over T: CRC Khớp! Ghi Flash OK
+    Note over T: CRC Matched! Flash Write OK
     T-->>G: ACK (0x06 / RESP_WRITE_ACK OK)
 
-    Note over G,T: [Gói 3: Rớt gói / Timeout Handshake]
-    G->>T: Packet #3 [Offset 0x0200, Data 256B, CRC] (Mất gói)
-    Note over G: Chờ ACK/NACK quá 500ms (Timeout)
-    G->>T: Packet #3 [Offset 0x0200, Data 256B, CRC] (Retry 1 / 3)
-    Note over T: CRC Khớp! Ghi Flash OK
+    Note over G,T: [Packet 3: Dropped Frame / Timeout]
+    G->>T: Packet #3 [Offset 0x0200, Data 256B, CRC] (Lost)
+    Note over G: Wait ACK/NACK (500ms Timeout expired)
+    G->>T: Packet #3 [Offset 0x0200, Data 256B, CRC] (Retry 1 of 3)
+    Note over T: CRC Matched! Flash Write OK
     T-->>G: ACK (0x06 / RESP_WRITE_ACK OK)
 ```
 
@@ -247,59 +245,59 @@ sequenceDiagram
 
 | Command Code | Name | Direction | Description |
 |---|---|---|---|
-| `0x01` | `CMD_PING` | ESP32 $\rightarrow$ STM32 | Kiểm tra trạng thái target MCU (Bootloader / App mode) |
-| `0x81` | `RESP_PONG` | STM32 $\rightarrow$ ESP32 | Target phản hồi trạng thái & phiên bản bootloader |
-| `0x02` | `CMD_ERASE` | ESP32 $\rightarrow$ STM32 | Yêu cầu xóa vùng Flash của Application |
-| `0x82` | `RESP_ERASE` | STM32 $\rightarrow$ ESP32 | Kết quả xóa Flash (Success / Error) |
-| `0x03` | `CMD_WRITE_DATA` | ESP32 $\rightarrow$ STM32 | Gói dữ liệu nạp Flash (Offset + Length + Chunk bytes) |
-| `0x83` | `RESP_WRITE_ACK` | STM32 $\rightarrow$ ESP32 | Phản hồi xác nhận ghi gói (`0x00`: ACK, `0x01`: NACK CRC, `0x02`: Flash Error) |
-| `0x04` | `CMD_VERIFY_CRC` | ESP32 $\rightarrow$ STM32 | Gửi mã CRC32 toàn file để STM32 tự kiểm tra toàn bộ Flash |
-| `0x84` | `RESP_VERIFY` | STM32 $\rightarrow$ ESP32 | Kết quả kiểm tra toàn diện Flash (MATCH_OK / MISMATCH) |
-| `0x05` | `CMD_JUMP_APP` | ESP32 $\rightarrow$ STM32 | Lệnh yêu cầu Bootloader chuyển quyền điều khiển sang Application |
+| `0x01` | `CMD_PING` | ESP32 $\rightarrow$ STM32 | Query target MCU status & active mode |
+| `0x81` | `RESP_PONG` | STM32 $\rightarrow$ ESP32 | Target responds with status & bootloader version |
+| `0x02` | `CMD_ERASE` | ESP32 $\rightarrow$ STM32 | Request erase of application flash sector |
+| `0x82` | `RESP_ERASE` | STM32 $\rightarrow$ ESP32 | Flash erase result (Success / Error) |
+| `0x03` | `CMD_WRITE_DATA` | ESP32 $\rightarrow$ STM32 | Binary chunk (Offset + Length + Data bytes) |
+| `0x83` | `RESP_WRITE_ACK` | STM32 $\rightarrow$ ESP32 | Chunk write acknowledgment (`0x00`: ACK, `0x01`: NACK CRC, `0x02`: Flash Error) |
+| `0x04` | `CMD_VERIFY_CRC` | ESP32 $\rightarrow$ STM32 | Send expected CRC32 for target Flash verification |
+| `0x84` | `RESP_VERIFY` | STM32 $\rightarrow$ ESP32 | Image verification result (MATCH_OK / MISMATCH) |
+| `0x05` | `CMD_JUMP_APP` | ESP32 $\rightarrow$ STM32 | Command bootloader to branch to Application |
 
 ---
 
-### 5.5 Điểm cộng kỹ thuật & Giá trị thực tế khi Phỏng vấn (Interview Value)
+### 5.5 Engineering Highlights & Interview Value
 
-- **Ứng dụng nguyên lý chuẩn công nghiệp:** Cơ chế này chính là nền tảng cốt lõi được áp dụng trong các giao thức truyền thông tiêu chuẩn thế giới (cơ chế Packet & Sliding Window ACK của **TCP**, kiểm tra mã lỗi CRC trong **Modbus RTU/CAN**, và bắt tay truyền file trong **Xmodem / Ymodem / Zmodem**).
-- **Chứng minh năng lực lập trình nhúng Bare-metal:** Việc tự tay thiết kế và lập trình Framing Parser, State Machine, tính toán CRC và xử lý Retry/Timeout thể hiện sự hiểu rõ bản chất truyền thông dữ liệu ở tầng thấp (low-level transport layer), không bị phụ thuộc vào các thư viện black-box có sẵn.
-- **Câu trả lời xuất sắc khi phỏng vấn:** Khi nhà tuyển dụng hỏi *"Làm thế nào bạn đảm bảo dữ liệu firmware không bị ghi sai khi truyền qua UART trong môi trường có nhiễu?"*, bạn có thể tự tin phân tích trực tiếp từ kiến trúc bảo vệ đa lớp (Packet-level CRC16 + ACK/NACK retransmit + Full-image CRC32 verification) mà chính bạn đã hiện thực trong dự án.
+- **Industry Protocol Parallels:** Implements the same core principles found in proven industrial standards (packetization and ACK handshakes in **TCP**, CRC error detection in **Modbus RTU/CAN**, and block-by-block retransmission in **Xmodem / Ymodem**).
+- **Bare-Metal Mastery:** Building the framing parser, state machine, CRC verification, and retry logic from scratch demonstrates low-level transport layer competence without relying on third-party black-box libraries.
+- **Key Interview Takeaway:** Concrete answer to the classic embedded interview question: *"How do you guarantee firmware integrity and recover from transmission errors over a noisy serial interface?"*
 
 ---
 
 ## 6. Fail-Safe & Anti-Bricking Mechanisms
 
-Cơ chế bảo vệ chống brick khi mất điện giữa chừng được thiết kế tối ưu cho MCU giới hạn tài nguyên (STM32F103 có 20KB RAM, không chứa hết file 40–50KB):
+Designed specifically for resource-constrained microcontrollers (STM32F103 has 20KB RAM, insufficient to buffer an entire 40–50KB firmware image):
 
-### 6.1 Cơ chế Fail-Safe Rollback & Pre-Verification (Luồng Option B)
+### 6.1 Fail-Safe Rollback & Pre-Verification Flow (Option B)
 
 ```
-[Phase 1: Pre-Verify]  ESP32 stream file (SPIFFS) ──> STM32 Hardware Running CRC ──> Khớp Total CRC32
-                                                                                           │ (Set Ready Flag)
-                                                                                           ▼
-[Phase 2: Safe Write]  Set Flag "ĐANG GHI" ──> Erase Flash ──> Ghi dữ liệu ──> Verify OK ──> Xóa Flag
-                                                      │ (Mất điện giữa chừng)
-                                                      ▼
-[Recovery on Reboot]   Bootloader thấy Flag "ĐANG GHI" ──> App hỏng ──> Báo LED / Chờ ESP32 nạp lại
+[Phase 1: Pre-Verify]  ESP32 streams file (SPIFFS) ──> STM32 Hardware Running CRC ──> Matches Total CRC32
+                                                                                            │ (Set Ready Flag)
+                                                                                            ▼
+[Phase 2: Safe Write]  Set Flag "IN_PROGRESS" ──> Erase Flash ──> Write Data ──> Verify OK ──> Clear Flag
+                                                       │ (Power Loss Interruption)
+                                                       ▼
+[Recovery on Reboot]   Bootloader detects "IN_PROGRESS" Flag ──> App Corrupt ──> Blink LED / Wait Reflash
 ```
 
-1. **Khởi tạo & Nhận Header:** STM32 nhận gói Header (`Total Size` + `Total CRC32`), lưu thông số vào RAM.
-2. **Streaming Pre-verification với Running CRC:**
-   - Do RAM chỉ 20KB, target không đệm cả file 40–50KB mà chia thành từng packet (128/256B).
-   - Khi nhận mỗi packet và verify CRC packet OK, dữ liệu được đẩy trực tiếp vào **STM32 Hardware CRC unit** theo cơ chế cộng dồn (**Running / Incremental CRC**).
-   - Nhận hết file $\rightarrow$ so sánh CRC tích lũy với Total CRC32 từ Header. Nếu khớp $\rightarrow$ set cờ *"Sẵn sàng ghi"*.
-3. **Set State Flag "ĐANG GHI" (Metadata In-Progress Flag):**
-   - ESP32 (lưu sẵn file tạm trên SPIFFS/LittleFS) bắt đầu stream đợt 2 để ghi Flash.
-   - Trước khi Erase/Write, STM32 ghi 1 byte cờ trạng thái vào vùng Metadata: `FLAG = 0x55` (**ĐANG GHI**).
-   - Sau khi ghi xong toàn bộ trang Flash + Verify Flash CRC32 thành công $\rightarrow$ Xóa cờ (`FLAG = 0x00` - **HOÀN THÀNH**).
-4. **Phục hồi tự động khi mất điện giữa chừng:**
-   - Nếu mất điện khi đang ghi $\rightarrow$ Khi có điện lại, Bootloader đọc thấy flag **"ĐANG GHI"** vẫn còn nguyên.
-   - Bootloader kết luận Firmware chính đã bị hỏng $\rightarrow$ **Không nhảy vào Application**, nhấp nháy LED `PC13` / gửi log UART cảnh báo và duy trì chế độ Bootloader chờ ESP32 nạp lại an toàn.
+1. **Header Handshake:** STM32 receives Header (`Total Size` + `Total CRC32`) and caches parameters in RAM.
+2. **Streaming Pre-verification via Running CRC:**
+   - Instead of buffering 40–50KB in 20KB RAM, target receives individual chunks (128B / 256B).
+   - After verifying each packet CRC, data is fed incrementally into the **STM32 Hardware CRC Unit** (**Running / Incremental CRC**).
+   - Once all packets arrive, accumulated CRC is compared against Header CRC32. If matched $\rightarrow$ set *"Ready to Write"* flag.
+3. **Metadata "IN_PROGRESS" State Flag:**
+   - ESP32 (storing cached image on SPIFFS/LittleFS) initiates Pass 2 for flash writing.
+   - Before Flash Erase/Write, STM32 writes a state flag to Metadata sector: `FLAG = 0x55` (**IN_PROGRESS**).
+   - Once all pages are written and full Flash CRC32 is verified $\rightarrow$ Clears flag: `FLAG = 0x00` (**COMPLETED**).
+4. **Automatic Power-Loss Recovery:**
+   - If power is cut during flashing $\rightarrow$ On reboot, Bootloader detects `FLAG == IN_PROGRESS`.
+   - Bootloader knows the User Application is incomplete/corrupted $\rightarrow$ **Refuses to jump to App**, blinks `PC13` LED / logs UART alert, and safely remains in Bootloader mode awaiting reflash.
 
-### 6.2 Lớp bảo vệ bổ sung
-- **Kiểm tra MSP & Vector Table:** Xác thực địa chỉ con trỏ stack (`MSP & 0x2FFE0000 == 0x20000000`) trước khi nhảy.
-- **Emergency Boot Pin (`PA0`):** Kéo `PA0` xuống GND khi reset để cưỡng bức ở lại Bootloader.
-- **Session Timeout (5000ms):** Tự động reset State Machine về IDLE nếu gián đoạn kết nối.
+### 6.2 Additional Safety Guards
+- **Stack Pointer (MSP) & Vector Table Check:** Validates initial MSP lies in valid SRAM (`0x20000000 - 0x20005000`) before jumping.
+- **Emergency Hardware Boot Pin (`PA0`):** Pulling `PA0` low during reset forces bootloader execution regardless of flash state.
+- **Session Timeout (5000ms):** Automatically resets state machine back to IDLE on communication stall.
 
 ---
 
