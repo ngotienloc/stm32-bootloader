@@ -1,96 +1,100 @@
-# CAN Bootloader Protocol Specification (CAN-BLP v1.0)
+# UART Bootloader Protocol Specification (UART-BLP v1.0)
 
 ## 1. Overview
-The CAN Bootloader Protocol (CAN-BLP) is a lightweight, reliable, ISO-TP/UDS inspired transport layer designed for reprogramming STM32 microcontrollers over standard CAN 2.0B networks (11-bit standard IDs).
+The UART Bootloader Protocol (UART-BLP) is a lightweight, reliable packet-based transport layer designed for reprogramming STM32 microcontrollers over standard UART / USART interfaces from an ESP32 Gateway or Host PC.
 
 ---
 
-## 2. CAN Frame Identifiers (Standard 11-bit)
+## 2. Packet Framing Format
 
-| ID (Hex) | Acronym | Source | Destination | Purpose |
-|---|---|---|---|---|
-| `0x100` | `CMD_PING` | Gateway | Target STM32 | Node discovery & state inquiry |
-| `0x101` | `RESP_PONG` | Target STM32 | Gateway | Current operational state & version |
-| `0x110` | `CMD_ENTER_BOOT` | Gateway | Target STM32 | Force transition to Bootloader mode |
-| `0x111` | `RESP_BOOT_ACK` | Target STM32 | Gateway | Status acknowledgment |
-| `0x120` | `CMD_ERASE_APP` | Gateway | Target STM32 | Flash page erase command |
-| `0x121` | `RESP_ERASE_ACK` | Target STM32 | Gateway | Flash erase completion result |
-| `0x130` | `DATA_FIRST_FRAME` | Gateway | Target STM32 | Payload total byte count & target CRC32 |
-| `0x131` | `DATA_CONSEC_FRAME`| Gateway | Target STM32 | Sequential binary stream packets |
-| `0x132` | `FLOW_CONTROL` | Target STM32 | Gateway | Rate control & readiness feedback |
-| `0x140` | `CMD_VERIFY_CRC` | Gateway | Target STM32 | Request complete memory verification |
-| `0x141` | `RESP_VERIFY` | Target STM32 | Gateway | CRC match/mismatch status |
-| `0x150` | `CMD_JUMP_APP` | Gateway | Target STM32 | Relocate vector table & boot app |
+All communication frames follow a structured packet layout with checksum verification:
 
----
+```
++---------------+---------------+---------------+---------------+---------------+---------------+
+| Header (2B)   | Command (1B)  | Length (2B)   | Payload (N B) | CRC16 (2B)    | Tail (1B)     |
+| 0xAA 0x55     | CMD_TYPE      | Big-Endian    | Data bytes    | CRC-16-CCITT  | 0x0D          |
++---------------+---------------+---------------+---------------+---------------+---------------+
+```
 
-## 3. Frame Formats & Payload Structures
-
-### 3.1 `CMD_PING` (0x100) & `RESP_PONG` (0x101)
-- **CMD_PING Payload (0 Bytes or 1 Byte):**
-  - Byte 0: `0xAA` (Magic query byte)
-- **RESP_PONG Payload (4 Bytes):**
-  - Byte 0: `Device State` (0x01 = Bootloader, 0x02 = Application)
-  - Byte 1: `Major Version`
-  - Byte 2: `Minor Version`
-  - Byte 3: `Valid App Flag` (0x01 = Valid app present in Flash, 0x00 = No valid app)
+### Field Descriptions:
+- **Header (`0xAA 0x55`):** 2 fixed synchronization bytes.
+- **Command / Response ID (`1 Byte`):** Specifies request or response type. Requests use `0x01..0x7F`, responses use `0x81..0xFF`.
+- **Length (`2 Bytes`, Big-Endian):** Total byte length of the payload field ($0 \le N \le 1024$).
+- **Payload (`N Bytes`):** Parameters, commands, or raw firmware chunks.
+- **CRC16 (`2 Bytes`, Big-Endian):** CRC-16-CCITT (Polynomial `0x1021`, Init `0xFFFF`) calculated over `[Command + Length + Payload]`.
+- **Tail (`0x0D`):** End-of-frame delimiter (`\r`).
 
 ---
 
-### 3.2 `CMD_ERASE_APP` (0x120) & `RESP_ERASE_ACK` (0x121)
-- **CMD_ERASE_APP Payload (4 Bytes):**
-  - Bytes [0..3]: `Total Image Size (uint32_t Little-Endian)`
-- **RESP_ERASE_ACK Payload (2 Bytes):**
-  - Byte 0: `Status` (0x00 = SUCCESS, 0x01 = INVALID_SIZE, 0x02 = FLASH_ERROR)
-  - Byte 1: `Pages Erased (uint8_t)`
+## 3. Command & Response Definitions
+
+| Command Code | Name | Source $\rightarrow$ Destination | Description |
+|---|---|---|---|
+| `0x01` | `CMD_PING` | ESP32 / Host $\rightarrow$ STM32 | Query target MCU status & active mode |
+| `0x81` | `RESP_PONG` | STM32 $\rightarrow$ ESP32 / Host | Returns mode (`0x01`: Bootloader, `0x02`: App), Version, Valid App flag |
+| `0x02` | `CMD_ERASE` | ESP32 / Host $\rightarrow$ STM32 | Erase application flash region |
+| `0x82` | `RESP_ERASE` | STM32 $\rightarrow$ ESP32 / Host | Flash erase status (`0x00`: Success, `0x01`: Error) |
+| `0x03` | `CMD_WRITE_DATA` | ESP32 / Host $\rightarrow$ STM32 | Write binary chunk (`Flash Offset [4B]` + `Chunk Data [NB]`) |
+| `0x83` | `RESP_WRITE_ACK` | STM32 $\rightarrow$ ESP32 / Host | Chunk write result (`0x00`: ACK, `0x01`: NACK / CRC error, `0x02`: Flash error) |
+| `0x04` | `CMD_VERIFY_CRC` | ESP32 / Host $\rightarrow$ STM32 | Send expected CRC32 of full image |
+| `0x84` | `RESP_VERIFY` | STM32 $\rightarrow$ ESP32 / Host | Verification result (`0x00`: Match OK, `0x01`: Mismatch) |
+| `0x05` | `CMD_JUMP_APP` | ESP32 / Host $\rightarrow$ STM32 | Command bootloader to branch to Application vector table |
 
 ---
 
-### 3.3 Multi-Frame Data Transfer
+## 4. Detailed Packet Payload Structures
 
-#### Step 1: First Frame (`DATA_FIRST_FRAME` - 0x130)
-- **DLC:** 8 Bytes
-- **Payload:**
-  - Bytes [0..3]: `Total Firmware Size (uint32_t)`
-  - Bytes [4..7]: `Expected CRC32 (uint32_t IEEE 802.3)`
-
-#### Step 2: Flow Control (`FLOW_CONTROL` - 0x132)
-- **DLC:** 3 Bytes
-- **Payload:**
-  - Byte 0: `Flow Status`
-    - `0x00`: **CTS** (Continue to send)
-    - `0x01`: **WAIT** (Buffer full / writing to flash page)
-    - `0x02`: **ABORT** (Sequence mismatch or timeout error)
-  - Byte 1: `Block Size (BS)` (Number of consecutive frames before next Flow Control, e.g., 8 frames)
-  - Byte 2: `Separation Time Minimum (STmin)` (Delay in ms between consecutive frames, e.g., 1 ms)
-
-#### Step 3: Consecutive Frames (`DATA_CONSEC_FRAME` - 0x131)
-- **DLC:** 2 to 8 Bytes
-- **Payload:**
-  - Byte 0: `Sequence Index (uint8_t)` (Incremented 0..255, wraps around)
-  - Bytes [1..7]: `Raw Firmware Bytes (1 to 7 bytes chunk)`
+### 4.1 `CMD_PING` (0x01) & `RESP_PONG` (0x81)
+- **`CMD_PING` Payload:** 0 bytes.
+- **`RESP_PONG` Payload (4 Bytes):**
+  - Byte 0: `Device State` (`0x01` = Bootloader, `0x02` = Application)
+  - Byte 1: `Bootloader Major Version`
+  - Byte 2: `Bootloader Minor Version`
+  - Byte 3: `Valid Application Present` (`0x01` = Valid, `0x00` = Invalid / Corrupt)
 
 ---
 
-### 3.4 Verification & Execution Branch
-
-#### `CMD_VERIFY_CRC` (0x140) & `RESP_VERIFY` (0x141)
-- **RESP_VERIFY Payload (5 Bytes):**
-  - Byte 0: `Status` (0x00 = PASS, 0x01 = MISMATCH, 0x02 = UNALIGNED_ERROR)
-  - Bytes [1..4]: `Calculated CRC32 on STM32 Flash (uint32_t)`
-
-#### `CMD_JUMP_APP` (0x150)
-- **Payload (1 Byte):**
-  - Byte 0: `0x55` (Magic execute key)
-- Target turns off bxCAN, de-initializes SysTick, resets registers, moves MSP, and executes user reset vector.
+### 4.2 `CMD_ERASE` (0x02) & `RESP_ERASE` (0x82)
+- **`CMD_ERASE` Payload (4 Bytes):**
+  - Bytes [0..3]: `Total Firmware Size (uint32_t Big-Endian)`
+- **`RESP_ERASE` Payload (2 Bytes):**
+  - Byte 0: `Status` (`0x00` = SUCCESS, `0x01` = INVALID_SIZE, `0x02` = FLASH_LOCKED_OR_ERROR)
+  - Byte 1: `Number of Pages Erased (uint8_t)`
 
 ---
 
-## 4. Timeout & Error Recovery Matrix
+### 4.3 `CMD_WRITE_DATA` (0x03) & `RESP_WRITE_ACK` (0x83)
+- **`CMD_WRITE_DATA` Payload (4 + N Bytes):**
+  - Bytes [0..3]: `Flash Memory Offset (uint32_t Big-Endian)` relative to `APP_BASE_ADDRESS` (`0x08004000`)
+  - Bytes [4..4+N-1]: `Binary payload chunk (e.g. 128, 256, or 512 bytes)`
+- **`RESP_WRITE_ACK` Payload (5 Bytes):**
+  - Byte 0: `Status` (`0x00` = ACK, `0x01` = NACK_CRC, `0x02` = FLASH_WRITE_FAIL)
+  - Bytes [1..4]: `Acknowledged Flash Offset (uint32_t)`
 
-| Condition | Target Action | Gateway Action |
+---
+
+### 4.4 `CMD_VERIFY_CRC` (0x04) & `RESP_VERIFY` (0x84)
+- **`CMD_VERIFY_CRC` Payload (8 Bytes):**
+  - Bytes [0..3]: `Total App Size (uint32_t)`
+  - Bytes [4..7]: `Expected IEEE 802.3 CRC32 (uint32_t)`
+- **`RESP_VERIFY` Payload (5 Bytes):**
+  - Byte 0: `Status` (`0x00` = MATCH_OK, `0x01` = CRC_MISMATCH)
+  - Bytes [1..4]: `Calculated Flash CRC32 (uint32_t)`
+
+---
+
+### 4.5 `CMD_JUMP_APP` (0x05)
+- **`CMD_JUMP_APP` Payload (1 Byte):**
+  - Byte 0: `0x55` (Magic execution confirmation key)
+- Target executes deinitialization, remaps `SCB->VTOR`, updates MSP, and branches to Application entry point.
+
+---
+
+## 5. Timeout & Error Recovery Matrix
+
+| Fault Condition | STM32 Action | ESP32 / Host Action |
 |---|---|---|
-| Consecutive frame sequence dropped | Transmit `FLOW_CONTROL` with status `ABORT` (0x02) | Re-initialize transfer from last acknowledged page |
-| Flash write error | Transmit `RESP_ERASE_ACK` or `FLOW_CONTROL` with `FLASH_ERROR` | Abort session, alert user via Web UI / Serial |
-| Timeout (> 3000ms idle) | Reset internal protocol state machine to IDLE | Retry handshake or report connection loss |
-| App reset vector invalid | Reject `CMD_JUMP_APP`, remain in Bootloader | Report corrupted binary to operator |
+| UART Frame CRC16 Mismatch | Send `RESP_WRITE_ACK` with `0x01` (NACK) | Re-transmit current chunk up to 3 retries |
+| Flash Write / Page Error | Send `RESP_WRITE_ACK` with `0x02` (ERROR) | Abort flashing session and alert operator |
+| Session Timeout (> 5000ms idle) | Reset internal receiver state to IDLE | Restart handshake starting from `CMD_PING` |
+| Application Vector Invalid | Reject `CMD_JUMP_APP`, remain in Bootloader | Report corrupted binary and trigger reflash |

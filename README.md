@@ -1,12 +1,12 @@
-# STM32F103 CAN Bootloader & ESP32-S3 Gateway
+# STM32 UART Bootloader & ESP32 Wireless Gateway
 
 [![Target STM32](https://img.shields.io/badge/MCU-STM32F103C8T6%20(ARM%20Cortex--M3)-002B49?logo=stmicroelectronics)](https://www.st.com)
-[![Gateway ESP32](https://img.shields.io/badge/Gateway-ESP32--S3%20(Xtensa%20LX7)-E7352C?logo=espressif)](https://www.espressif.com)
-[![Bus](https://img.shields.io/badge/Protocol-CAN%202.0B%20%7C%20ISO--TP%20Inspired-00599C)](https://en.wikipedia.org/wiki/CAN_bus)
+[![Gateway ESP32](https://img.shields.io/badge/Gateway-ESP32%20%2F%20ESP32--S3-E7352C?logo=espressif)](https://www.espressif.com)
+[![Bus](https://img.shields.io/badge/Protocol-UART%20%2F%20Packet--Based-00599C)](https://en.wikipedia.org/wiki/Universal_asynchronous_receiver-transmitter)
 [![Language](https://img.shields.io/badge/Language-C%20%7C%20Python%20%7C%20C%2B%2B-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A robust, production-grade custom CAN Bootloader for **STM32F103C8T6** (ARM Cortex-M3) paired with an **ESP32-S3 Wireless/USB Gateway**. This project enables secure, fail-safe In-System Programming (ISP) and In-Application Programming (IAP) over a 2-wire differential CAN Bus (bxCAN <-> TWAI) at 500 kbps, eliminating the need for dedicated SWD/JTAG debuggers during field updates.
+A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM Cortex-M3) paired with an **ESP32 Wireless Gateway**. This project enables reliable In-Application Programming (IAP) and Over-The-Air (OTA) firmware updates over a simple full-duplex UART interface (115200 - 921600 bps), eliminating the need for dedicated ST-Link/JTAG debuggers during field maintenance.
 
 ---
 
@@ -14,8 +14,8 @@ A robust, production-grade custom CAN Bootloader for **STM32F103C8T6** (ARM Cort
 - [1. System Architecture](#1-system-architecture)
 - [2. Key Features](#2-key-features)
 - [3. Hardware Specifications & Pinout](#3-hardware-specifications--pinout)
-- [4. Memory Map & Vector Table Management](#4-memory-map--vector-table-management)
-- [5. CAN Communication & Flashing Protocol](#5-can-communication--flashing-protocol)
+- [4. Memory Map & Vector Table Relocation](#4-memory-map--vector-table-relocation)
+- [5. UART Communication & Flashing Protocol](#5-uart-communication--flashing-protocol)
 - [6. Fail-Safe & Anti-Bricking Mechanisms](#6-fail-safe--anti-bricking-mechanisms)
 - [7. Directory Structure](#7-directory-structure)
 - [8. Getting Started & Build Guide](#8-getting-started--build-guide)
@@ -27,60 +27,45 @@ A robust, production-grade custom CAN Bootloader for **STM32F103C8T6** (ARM Cort
 
 ## 1. System Architecture
 
-The system decouples the communication frontend from the real-time target MCU:
-1. **Host PC / Web Client:** Transmits the compiled `.bin` / `.hex` binary via USB Serial or WiFi Web Interface.
-2. **ESP32-S3 Gateway:** Parses firmware payload, handles protocol framing (fragmentation into CAN frames), manages flow control, and pushes packets across the CAN bus via TWAI (Two-Wire Automotive Interface).
-3. **STM32F103 Target (Bootloader):** Receives multi-frame CAN packets, validates CRC32 / checksums, programs internal Flash pages (1 KB granularity), verifies programmed memory, and vectors execution to the User Application.
+The system decouples network communication and target execution:
+1. **Host PC / Web Client:** Transmits the compiled `.bin` / `.hex` binary via Web UI, MQTT/HTTP OTA, or Python CLI.
+2. **ESP32 Gateway:** Receives binary stream over Wi-Fi / Bluetooth / USB, chunks the payload into verified UART packets, manages flow control, and drives STM32 reset/boot pins if hardware-assisted boot is enabled.
+3. **STM32F103 Target (Bootloader):** Receives structured UART frames, validates CRC32 / Checksums, flashes internal Flash pages (1 KB granularity), verifies programmed memory, and jumps execution to the User Application.
 
 ```
-+------------------+         WiFi (HTTP/WebSockets)        +--------------------+
-|  Host Machine    | ------------------------------------> |  ESP32-S3 Gateway  |
-|  (PC / Web UI /  |         USB-CDC (VCP / CLI)           |  - TWAI Driver     |
-|   Python Tool)   | <-----------------------------------> |  - LittleFS / Web  |
-+------------------+                                       +--------------------+
-                                                                     |
-                                                              [ CAN-TX / CAN-RX ]
-                                                                     |
-                                                           +--------------------+
-                                                           | 3.3V CAN Tx/Rx     |
-                                                           | (SN65HVD230/TJA1050|
-                                                           +--------------------+
-                                                                     |
-                                                   =====================================
-                                                   CAN Bus (CAN_H / CAN_L) (120 Ohm Term)
-                                                   =====================================
-                                                                     |
-                                                           +--------------------+
-                                                           | 3.3V/5V CAN Transc |
-                                                           +--------------------+
-                                                                     |
-                                                              [ CAN-TX / CAN-RX ]
-                                                                     |
-                                                           +--------------------+
-                                                           | STM32F103 (Target) |
-                                                           | - bxCAN Peripheral |
-                                                           | - Flash Controller |
-                                                           | - VTOR Relocator   |
-                                                           +--------------------+
++------------------+         WiFi (HTTP / WebSockets / OTA)     +--------------------+
+|  Host Machine    | -----------------------------------------> |   ESP32 Gateway    |
+|  (PC / Web UI /  |         USB-CDC / Serial CLI               |  - Web OTA Server  |
+|   Python Tool)   | <----------------------------------------> |  - UART Packetizer |
++------------------+                                            +--------------------+
+                                                                           |
+                                                             [ Direct 3.3V UART (TX/RX) ]
+                                                             [ Optional: NRST / BOOT0   ]
+                                                                           |
+                                                                +--------------------+
+                                                                | STM32F103 (Target) |
+                                                                | - USART Peripheral |
+                                                                | - Flash Controller |
+                                                                | - VTOR Relocator   |
+                                                                +--------------------+
 ```
 
 ---
 
 ## 2. Key Features
 
-- **High-Speed Bus Reliability:** Configured for CAN 2.0B Standard 11-bit identifier framing at **500 kbps** (configurable to 250 kbps or 1 Mbps).
-- **ISO-TP Inspired Multi-Frame Protocol:** Overcomes the standard 8-byte CAN payload limitation with chunking:
-  - *Single Frame (SF)* for commands and control signals.
-  - *First Frame (FF)* declaring payload length and metadata.
-  - *Consecutive Frame (CF)* streaming binary chunks with sequence counters.
-  - *Flow Control (FC)* preventing buffer overflow on the target MCU.
-- **Hardware-Level Vector Table Relocation:** Clean separation between Bootloader (0x08000000) and User Application (0x08004000) with dynamic `SCB->VTOR` remap and Stack Pointer validation before jumping.
-- **Robust Integrity Checking:** CRC32 calculation over raw binary streams + Page-by-Page Flash verification against written memory buffers.
+- **High-Speed & Simple Wiring:** Operates directly over standard 3.3V UART logic levels (115200 to 921600 bps) with just 2 communication wires (`TX`/`RX`) + `GND`. No extra transceivers or termination resistors required.
+- **Packet-Based Frame Protocol:**
+  - Robust framing with Header (`0xAA 0x55`), Packet Type, Length, Payload, and CRC16/CRC32.
+  - Chunked binary transfer with configurable buffer size (128B, 256B, 512B, 1024B) for high throughput.
+  - Strict ACK / NACK and Flow Control handshake.
+- **Hardware-Level Vector Table Relocation:** Clean separation between Bootloader (`0x08000000`) and User Application (`0x08004000`) with dynamic `SCB->VTOR` remap and Main Stack Pointer (MSP) integrity verification prior to branching.
+- **Dual Verification Engine:** Frame-level CRC16 check + Image-wide hardware CRC32 validation over programmed Flash pages.
 - **Fail-Safe & Anti-Brick Boot Sequence:**
-  - Application Header validation (checks initial MSP points to valid SRAM range `0x20000000 - 0x20005000` and Reset Handler points to Flash range `0x08004000 - 0x08010000`).
-  - Emergency Boot Pin: Force stay in Bootloader mode if user button is held low during reset.
-  - Interrupted flash recovery: If power drops mid-write, the bootloader stays active awaiting re-transmission.
-- **Dual Flash Storage / Chunk Buffering:** Page erase executed strictly on target page boundaries (1024 bytes) to maximize flash endurance and minimize write cycle stalls.
+  - Application Header validation (checks initial MSP points to valid SRAM range `0x20000000 - 0x20005000` and Reset Vector points to valid Flash address `0x08004000 - 0x08010000`).
+  - Emergency Boot Pin: Force bootloader mode if user button / jumper (`PA0`) is held low during reset.
+  - Interrupted flash recovery: If power drops mid-write, the bootloader remains intact and waits for re-transmission.
+- **Optional Hardware Flow & Reset Control:** ESP32 can optionally toggle `NRST` and `BOOT0` pins to automate entry into boot mode or system recovery without user intervention.
 
 ---
 
@@ -90,54 +75,39 @@ The system decouples the communication frontend from the real-time target MCU:
 | Item | Part / Model | Quantity | Notes |
 |---|---|---|---|
 | Target MCU | STM32F103C8T6 (Blue Pill) | 1 | 64 KB Flash, 20 KB SRAM, Cortex-M3 @ 72 MHz |
-| Gateway MCU | ESP32-S3-DevKitC-1 | 1 | Dual-core Xtensa LX7 @ 240 MHz, TWAI, WiFi/BLE |
-| CAN Transceiver | SN65HVD230 / TJA1050 | 2 | 3.3V logic compatible (SN65HVD230 recommended for direct 3.3V logic) |
-| Bus Termination | 120 $\Omega$ Resistor | 2 | Placed across `CAN_H` and `CAN_L` at both bus termination ends |
-| Programmer | ST-Link V2 | 1 | Used initially to flash the bootloader |
+| Gateway MCU | ESP32 / ESP32-S3 / ESP8266 | 1 | Wi-Fi / BLE connectivity, Dual-core |
+| Programmer | ST-Link V2 | 1 | Used once to flash the initial bootloader |
+| Interconnect | Jumper wires | - | Female-to-Female / Breadboard |
 
 ### 3.2 Interconnection & Wiring
 
-#### STM32F103 <-> CAN Transceiver (Node 1 - Target)
-| STM32 Pin | Transceiver Pin | Function / Description |
+#### STM32F103 <-> ESP32 Direct UART Connection
+| STM32 Pin | ESP32 GPIO | Function / Description |
 |---|---|---|
-| **PA11** (or PB8 if remapped) | `CTX` / `TXD` | bxCAN Receive / Transmit lines |
-| **PA12** (or PB9 if remapped) | `CRX` / `RXD` | |
-| **3.3V / 5V** | `VCC` | Power (3.3V for SN65HVD230, 5V for TJA1050) |
-| **GND** | `GND` | Common Ground |
-| **PA0** | Button / Pull-up | Force Bootloader Mode Trigger (Active Low) |
-| **PC13** | On-board LED | Bootloader Status Indicator |
+| **PA9 (USART1_TX)** | **GPIO 16 (UART_RX)** | STM32 Transmit $\rightarrow$ ESP32 Receive |
+| **PA10 (USART1_RX)**| **GPIO 17 (UART_TX)** | STM32 Receive $\leftarrow$ ESP32 Transmit |
+| **3.3V** | **3.3V** | Logic Level / Power Supply |
+| **GND** | **GND** | Common Ground (Mandatory) |
+| **NRST** *(Optional)* | **GPIO 18** | ESP32-controlled Hardware Reset |
+| **PA0 / BOOT0** *(Opt)* | **GPIO 19** | ESP32-controlled Force Bootloader Mode |
+| **PC13** | - | On-board LED (Status Indicator) |
 
-#### ESP32-S3 <-> CAN Transceiver (Node 2 - Gateway)
-| ESP32-S3 GPIO | Transceiver Pin | Function / Description |
-|---|---|---|
-| **GPIO 4** (Configurable) | `TXD` | TWAI Controller TX |
-| **GPIO 5** (Configurable) | `RXD` | TWAI Controller RX |
-| **3.3V** | `VCC` | Power |
-| **GND** | `GND` | Common Ground |
-
-#### Differential Bus Line
-```
-[Node 1 CAN Transceiver]                                      [Node 2 CAN Transceiver]
-     CAN_H ---------------------+---------------------------------- CAN_H
-                                |
-                             [120 Ohm]                          [120 Ohm]
-                                |                                  |
-     CAN_L ---------------------+---------------------------------- CAN_L
-```
+> [!IMPORTANT]
+> Both STM32 and ESP32 operate at **3.3V logic levels**. Do NOT connect 5V UART signals directly to STM32 pins without level shifting.
 
 ---
 
-## 4. Memory Map & Vector Table Management
+## 4. Memory Map & Vector Table Relocation
 
-The STM32F103C8T6 internal Flash is partitioned into two distinct sectors:
+The STM32F103C8T6 internal 64 KB Flash memory is partitioned into two regions:
 
 ```
 0x08000000 +-----------------------------------------------+
            |                                               |
            |      Bootloader Firmware (16 KB)              |
-           |      - bxCAN Driver                           |
+           |      - USART Driver & Ring Buffer             |
            |      - Flash Page Writer / Eraser             |
-           |      - Protocol Parser & CRC32 Engine         |
+           |      - Packet Parser & CRC Engine             |
            |                                               |
 0x08004000 +-----------------------------------------------+ <--- Application Base Address
            |      App Vector Table (0x08004000)            |      (SCB->VTOR = 0x08004000)
@@ -154,7 +124,7 @@ The STM32F103C8T6 internal Flash is partitioned into two distinct sectors:
 ### Jump to Application Routine Sequence
 Before transferring execution to the user application, the bootloader performs an atomic teardown:
 1. **Disable all interrupts:** `__disable_irq();`
-2. **De-initialize peripherals:** Reset bxCAN, SysTick Timer, and GPIOs back to default reset states.
+2. **De-initialize peripherals:** Reset USART, SysTick Timer, and GPIOs back to default reset states.
 3. **Verify Valid Application:**
    ```c
    uint32_t app_msp = *(__IO uint32_t*)APP_START_ADDRESS;
@@ -177,58 +147,57 @@ Before transferring execution to the user application, the bootloader performs a
 
 ---
 
-## 5. CAN Communication & Flashing Protocol
+## 5. UART Communication & Flashing Protocol
 
-The protocol utilizes standardized 11-bit CAN identifiers categorized into Service Request / Response pairs.
+The protocol utilizes framed packets with checksum verification and explicit acknowledgments.
 
-### 5.1 CAN ID Allocation
+### 5.1 Packet Structure
+```
++---------------+---------------+---------------+---------------+---------------+---------------+
+| Header (2B)   | Command (1B)  | Length (2B)   | Payload (N B) | CRC16 (2B)    | Tail (1B)     |
+| 0xAA 0x55     | CMD_TYPE      | Big-Endian    | Data bytes    | Modbus/CCITT  | 0x0D          |
++---------------+---------------+---------------+---------------+---------------+---------------+
+```
 
-| CAN ID (Hex) | Name | Direction | Description |
+### 5.2 Command Set
+| Command Code | Name | Direction | Description |
 |---|---|---|---|
-| `0x100` | `CMD_PING` | Gateway -> STM32 | Ping target MCU to check presence |
-| `0x101` | `RESP_PONG` | STM32 -> Gateway | Target responds with status (Boot/App mode) |
-| `0x110` | `CMD_ENTER_BOOT` | Gateway -> STM32 | Request MCU to enter Bootloader mode |
-| `0x111` | `RESP_BOOT_ACK` | STM32 -> Gateway | Acknowledge bootloader entry readiness |
-| `0x120` | `CMD_ERASE_APP` | Gateway -> STM32 | Request mass/page erase of app partition |
-| `0x121` | `RESP_ERASE_ACK`| STM32 -> Gateway | Erase status response (Success/Fail/Busy) |
-| `0x130` | `DATA_FIRST_FRAME` | Gateway -> STM32 | Total image size (4B) + Target CRC32 (4B) |
-| `0x131` | `DATA_CONSEC_FRAME`| Gateway -> STM32 | Sequence Index (1B) + Binary payload (up to 7B) |
-| `0x132` | `FLOW_CONTROL` | STM32 -> Gateway | CTS (Continue To Send), Wait, or Abort |
-| `0x140` | `CMD_VERIFY_CRC`| Gateway -> STM32 | Final validation trigger |
-| `0x141` | `RESP_VERIFY` | STM32 -> Gateway | Validation result (Passed / Checksum error) |
-| `0x150` | `CMD_JUMP_APP` | Gateway -> STM32 | Command target to branch to Application |
+| `0x01` | `CMD_PING` | ESP32 $\rightarrow$ STM32 | Ping target MCU & get state (Boot / App mode) |
+| `0x81` | `RESP_PONG` | STM32 $\rightarrow$ ESP32 | Target responds with status & bootloader version |
+| `0x02` | `CMD_ERASE` | ESP32 $\rightarrow$ STM32 | Request erase of application flash sector |
+| `0x82` | `RESP_ERASE` | STM32 $\rightarrow$ ESP32 | Flash erase result (Success / Error) |
+| `0x03` | `CMD_WRITE_DATA` | ESP32 $\rightarrow$ STM32 | Binary chunk (Offset + Size + Raw bytes) |
+| `0x83` | `RESP_WRITE_ACK` | STM32 $\rightarrow$ ESP32 | Chunk write acknowledgment (ACK / NACK) |
+| `0x04` | `CMD_VERIFY_CRC` | ESP32 $\rightarrow$ STM32 | Request complete CRC32 check on flash |
+| `0x84` | `RESP_VERIFY` | STM32 $\rightarrow$ ESP32 | Verification result (MATCH / MISMATCH) |
+| `0x05` | `CMD_JUMP_APP` | ESP32 $\rightarrow$ STM32 | Command target to branch to Application |
 
-### 5.2 Flash Update Sequence Flow
+### 5.3 Flash Update Sequence Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant G as ESP32-S3 Gateway
+    participant G as ESP32 Gateway
     participant T as STM32 Target (Bootloader)
 
-    G->>T: [0x100] CMD_PING
-    T-->>G: [0x101] RESP_PONG (Mode = Bootloader)
+    G->>T: [0x01] CMD_PING
+    T-->>G: [0x81] RESP_PONG (State = Bootloader, Ver = 1.0)
 
-    G->>T: [0x120] CMD_ERASE_APP (Size = 32768 Bytes)
-    Note over T: Erase 32 Pages (0x08004000 - 0x0800C000)
-    T-->>G: [0x121] RESP_ERASE_ACK (Status = OK)
+    G->>T: [0x02] CMD_ERASE (App Size = 32768 Bytes)
+    Note over T: Erase Pages (0x08004000 .. 0x0800C000)
+    T-->>G: [0x82] RESP_ERASE (Status = SUCCESS)
 
-    G->>T: [0x130] DATA_FIRST_FRAME (Len = 32768, CRC32 = 0x8A14E092)
-    T-->>G: [0x132] FLOW_CONTROL (CTS = Clear To Send, BlockSize = 8)
-
-    loop Block Transfer (Chunk Stream)
-        G->>T: [0x131] DATA_CONSEC_FRAME (Seq: 0x01, Data: 7 bytes)
-        G->>T: [0x131] DATA_CONSEC_FRAME (Seq: 0x02, Data: 7 bytes)
-        G->>T: [0x131] DATA_CONSEC_FRAME (Seq: 0x03, Data: 7 bytes)
-        Note over T: Buffer 1024B & Program Flash Page
-        T-->>G: [0x132] FLOW_CONTROL (CTS, Next Block)
+    loop Chunks Transfer (e.g., 256 bytes per packet)
+        G->>T: [0x03] CMD_WRITE_DATA (Offset, Chunk Data, CRC16)
+        Note over T: Write buffer into Flash Page
+        T-->>G: [0x83] RESP_WRITE_ACK (Status = OK)
     end
 
-    G->>T: [0x140] CMD_VERIFY_CRC
-    Note over T: Compute Hardware/Software CRC32 over App Area
-    T-->>G: [0x141] RESP_VERIFY (Status = MATCH_OK)
+    G->>T: [0x04] CMD_VERIFY_CRC (Expected CRC32)
+    Note over T: Compute Hardware CRC32 over App Area
+    T-->>G: [0x84] RESP_VERIFY (Status = MATCH_OK)
 
-    G->>T: [0x150] CMD_JUMP_APP
+    G->>T: [0x05] CMD_JUMP_APP
     Note over T: Teardown, SCB->VTOR, Reset MSP, Jump!
 ```
 
@@ -236,53 +205,53 @@ sequenceDiagram
 
 ## 6. Fail-Safe & Anti-Bricking Mechanisms
 
-1. **Power Loss Immunity:** Flash writes are committed page-by-page. If power drops mid-transfer, the Bootloader remains permanently in 0x08000000. On restart, the invalid application header prevents erratic execution and holds in boot mode.
-2. **Double Integrity Validation:**
-   - Transport Level: Sequence numbering detects dropped CAN frames.
-   - Storage Level: Full hardware CRC32 computed across the newly written image before setting the valid application flag.
-3. **Emergency Manual Override:** If the user application contains critical bugs or hangs, grounding `PA0` during reset forces the bootloader to stay active and ignore the existing application.
-4. **Timeout Watchdog:** If packet transmission stalls for longer than 3000 ms during an active update session, the bootloader cancels the session and re-enters the standby listening state.
+1. **Power Loss Immunity:** Writes are committed page-by-page. If power drops mid-transfer, the Bootloader at `0x08000000` remains intact. Upon reboot, the invalid Application Vector Table prevents crashing and forces the MCU to stay in bootloader mode.
+2. **Dual-Layer Integrity Validation:**
+   - Packet Level: CRC16 on each individual UART frame prevents bit corruption during transmission.
+   - Image Level: Full hardware CRC32 computed across the newly written image before setting the valid application flag.
+3. **Emergency Manual Boot Pin:** Pulling `PA0` to GND during reset forces the bootloader to stay in listening mode regardless of whether a valid application exists.
+4. **Communication Timeout:** If no valid packets are received within 5000 ms during a flashing session, the state machine resets cleanly to standby.
 
 ---
 
 ## 7. Directory Structure
 
 ```
-stm32-can-bootloader/
+stm32-bootloader/
 ├── README.md                          # Project overview & documentation
 ├── docs/                              # Detailed specifications & schematics
-│   ├── protocol_spec.md               # Bit-level CAN Protocol framing specification
-│   ├── hardware_schematic.png         # Wiring diagrams & breadboard layouts
+│   ├── protocol_spec.md               # UART protocol framing & packet format
+│   ├── hardware_schematic.png         # Wiring diagrams & pinouts
 │   └── memory_layout.md               # Flash sector & linker configuration details
 ├── bootloader/                        # STM32 Bootloader Firmware (Target)
 │   ├── Core/
 │   │   ├── Inc/
 │   │   │   ├── bootloader.h           # Jump, Flash & Protocol headers
-│   │   │   ├── can_driver.h           # bxCAN initialization & filter config
-│   │   │   └── crc32.h                # CRC32 validation routines
+│   │   │   ├── uart_driver.h          # USART configuration & ring buffer
+│   │   │   └── crc32.h                # Hardware/Software CRC calculation
 │   │   └── Src/
 │   │       ├── bootloader.c           # State machine, Flash write/erase
-│   │       ├── can_driver.c           # CAN message dispatching
-│   │       ├── crc32.c                # Hardware/Software CRC calculation
+│   │       ├── uart_driver.c          # Non-blocking UART driver
+│   │       ├── crc32.c                # CRC32 calculation routines
 │   │       └── main.c                 # Bootloader entry point & boot pin check
 │   ├── STM32F103C8Tx_FLASH_BOOT.ld    # Linker script (16KB Flash allocation)
 │   └── Makefile / CMakeLists.txt      # Build configuration
 ├── application/                       # STM32 Demo User Application (Target)
 │   ├── Core/
 │   │   └── Src/
-│   │       └── main.c                 # Application logic (Blink LED / CAN echo)
+│   │       └── main.c                 # Application logic (Blink LED / UART echo)
 │   ├── STM32F103C8Tx_FLASH_APP.ld     # Linker script (Offset 0x08004000, 48KB)
 │   └── Makefile / CMakeLists.txt      # Build configuration
-├── gateway_esp32/                     # ESP32-S3 Gateway Firmware
+├── gateway_esp32/                     # ESP32 Gateway Firmware
 │   ├── main/
-│   │   ├── twai_can_master.c          # ESP32 TWAI driver & framing engine
+│   │   ├── uart_flasher.c             # ESP32 UART master packetizer
 │   │   ├── wifi_ota_server.c          # Web server for browser-based .bin upload
 │   │   └── main.c                     # Gateway controller entry
 │   └── CMakeLists.txt                 # ESP-IDF build system
 └── tools/                             # Host Deployment & Test Utilities
-    ├── can_uploader.py                # Python serial/CAN direct flashing script
+    ├── uart_uploader.py               # Python CLI direct UART flashing script
     ├── bin_checksum_patcher.py        # Pre-process binary, inject CRC32 header
-    └── requirements.txt               # Python dependencies (pyserial, python-can)
+    └── requirements.txt               # Python dependencies (pyserial)
 ```
 
 ---
@@ -291,13 +260,12 @@ stm32-can-bootloader/
 
 ### 8.1 Prerequisites
 - **ARM GCC Toolchain:** `arm-none-eabi-gcc` (v10+), `make` or `ninja`, `openocd` or `stlink-tools`.
-- **ESP32-S3 Toolchain:** [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/) or PlatformIO.
-- **Python Environment:** Python 3.9+ with `python-can`, `pyserial`.
+- **ESP32 Toolchain:** [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/) or PlatformIO / Arduino IDE.
+- **Python Environment:** Python 3.9+ with `pyserial`.
 
 ### 8.2 Building the STM32 Bootloader
 ```bash
 cd bootloader
-# Compile the bootloader elf & bin
 make -j4
 # Flash bootloader once via ST-Link
 st-flash write build/bootloader.bin 0x08000000
@@ -306,58 +274,54 @@ st-flash write build/bootloader.bin 0x08000000
 ### 8.3 Building the STM32 User Application
 ```bash
 cd application
-# Compile user app configured with 0x08004000 offset
 make -j4
 # Output: build/application.bin
 ```
 
-### 8.4 Building the ESP32-S3 Gateway
+### 8.4 Building the ESP32 Gateway
 ```bash
 cd gateway_esp32
-idf.py set-target esp32s3
+idf.py set-target esp32
 idf.py build
-idf.py -p /dev/ttyACM0 flash monitor
+idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
 ---
 
 ## 9. Testing & Verification
 
-1. **CAN Bus Loopback & Impedance Test:**
-   - Measure resistance between `CAN_H` and `CAN_L` when powered down. The multimeter must show **$\approx 60\ \Omega$** (two $120\ \Omega$ resistors in parallel).
-2. **Flash Update via Python CLI:**
+1. **Direct PC-to-STM32 UART Flashing (via USB-TTL converter):**
    ```bash
-   python3 tools/can_uploader.py \
+   python3 tools/uart_uploader.py \
        --port /dev/ttyUSB0 \
        --baudrate 115200 \
-       --file application/build/application.bin \
-       --target-id 0x100
+       --file application/build/application.bin
    ```
-3. **OTA Flash Update via Web Interface:**
-   - Connect to ESP32 Access Point: `STM32-CAN-Gateway`
+2. **OTA Flash Update via ESP32 Web Interface:**
+   - Connect to ESP32 Wi-Fi AP: `STM32-UART-Gateway`
    - Navigate to `http://192.168.4.1`
-   - Choose `application.bin` and click **Flash Target**. Monitor live progress bar on Web UI.
+   - Select `application.bin` and click **Flash Target**.
+   - Monitor live upload progress and status on Web UI.
 
 ---
 
 ## 10. Roadmap
 
 - [x] Initial Architecture & Memory Map Design
-- [ ] G0: Hardware verification (Loopback bxCAN & TWAI)
-- [ ] G1: Minimal UART-based Bootloader baseline with Flash/Jump logic
-- [ ] G2: bxCAN & TWAI 500 kbps transport configuration
-- [ ] G3: Protocol implementation (Multi-frame ISO-TP chunking)
-- [ ] G4: Full end-to-end CAN flash integration
-- [ ] G5: Hardening against sudden power loss & CRC faults
-- [ ] G6: Web UI OTA Dashboard on ESP32-S3 & SSD1306 OLED Status Display
+- [ ] G0: Hardware verification (Direct UART loopback & Pin verification)
+- [ ] G1: Minimal UART-based Bootloader with Flash write & Jump logic
+- [ ] G2: Packet framing protocol with CRC16 & ACK/NACK
+- [ ] G3: Python flashing tool (`uart_uploader.py`)
+- [ ] G4: ESP32 Gateway firmware (Web OTA / Serial Forwarding)
+- [ ] G5: Hardening against power drop & corrupted transmission
+- [ ] G6: Web UI Dashboard on ESP32 & OLED status display
 
 ---
 
 ## 11. License & References
 
-- **License:** Distributed under the MIT License. See `LICENSE` for more information.
+- **License:** Distributed under the MIT License. See `LICENSE` for details.
 - **References:**
-  - STM32F103xC/D/E Reference Manual (*RM0008*) — bxCAN & Flash Memory Controller.
+  - STM32F103xC/D/E Reference Manual (*RM0008*) — Flash Memory Controller & USART.
   - ST AN2606: *STM32 microcontroller system memory boot mode*.
-  - Espressif TWAI (Two-Wire Automotive Interface) Guide.
-  - ISO 15765-2 (ISO-TP Road Vehicles Diagnostic Communication).
+  - ST AN3155: *USART protocol used in the STM32 bootloader*.
