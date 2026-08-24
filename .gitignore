@@ -1,45 +1,52 @@
-# Build directories
-build/
-bin/
-obj/
+# ==========================================
+# 1. STM32 & Embedded Build Artifacts
+# ==========================================
+**/build/
+**/bin/
+**/obj/
+**/Debug/
+**/Release/
 *.o
 *.d
 *.elf
 *.bin
 *.hex
 *.map
+*.lst
+*.su
 
-# IDE & Editor configs
-.vscode/
-.idea/
-*.swp
-*~
-*.launch
-*.sublime-project
-*.sublime-workspace
-
-# STM32 Cube / Keil / IAR
-Debug/
-Release/
+# CubeMX temporary files
 .mxproject
-*.uvopt*
-*.uvproj*
-*.dep
-*.ewd
-*.ewp
-*.eww
+*.launch
 
-# ESP-IDF
+# ==========================================
+# 2. ESP-IDF (Gateway ESP32)
+# ==========================================
 gateway_esp32/build/
 gateway_esp32/managed_components/
 gateway_esp32/dependencies.lock
 gateway_esp32/sdkconfig.old
 *.sdkconfig
 
-# Python
+# ==========================================
+# 3. Python Virtualenv & Cache
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 ENV/
+*.egg-info/
+
+# ==========================================
+# 4. IDEs & OS Meta files
+# ==========================================
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
