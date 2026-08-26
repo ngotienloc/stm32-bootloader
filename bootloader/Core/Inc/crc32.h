@@ -1,5 +1,5 @@
-#ifnef CRC32_H
-#define CRC32_H
+#ifndef __CRC32_H
+#define __CRC32_H
 
 #include "main.h"
 
