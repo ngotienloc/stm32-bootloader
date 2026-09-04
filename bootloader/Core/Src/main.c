@@ -59,7 +59,7 @@ static void MX_CRC_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); // Enable UART receive interrupt
 /* USER CODE END 0 */
 
 /**

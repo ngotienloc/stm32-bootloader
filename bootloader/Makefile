@@ -53,9 +53,9 @@ Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c \
 Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_exti.c \
 Core/Src/system_stm32f1xx.c \
 Core/Src/sysmem.c \
-Core/Src/syscalls.c \
-Core/Src/crc32.c\
-Core/Src/ringbuffer.c\
+Core/Src/crc32.c \
+Core/Src/ring_buffer.c \
+Core/Src/parser.c \
 Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_crc.c
 
 
