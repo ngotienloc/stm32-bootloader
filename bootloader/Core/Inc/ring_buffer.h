@@ -1,13 +1,14 @@
 #ifndef __RING_BUFFER_H
 #define __RING_BUFFER_H
 #include <stdint.h>
+#include <stdbool.h>
 
 #define RING_BUFFER_SIZE 512 
 
-struct RingBuffer { 
+typedef struct RingBuffer { 
     uint8_t buffer[RING_BUFFER_SIZE]; 
-    uint16_t head; 
-    uint16_t tail; 
+    volatile uint16_t head; 
+    volatile uint16_t tail; 
 } RingBuffer;
 
 void RingBuffer_Init(struct RingBuffer *rb);

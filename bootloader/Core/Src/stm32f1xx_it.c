@@ -57,7 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
-
+extern RingBuffer rx; 
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -204,7 +204,10 @@ void SysTick_Handler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-
+  if(__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)){
+    uint8_t data = (uint8_t)(USART1->DR & 0xFF); // Read the received data
+    RingBuffer_Put(&rx, data); 
+  }
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */
