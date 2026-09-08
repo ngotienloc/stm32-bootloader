@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "crc32.h"
+#include "ring_buffer.h"
+#include "parser.h"
+#include "protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,12 +57,12 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_CRC_Init(void);
 /* USER CODE BEGIN PFP */
-
+void Protocol_SendResponse(uint8_t cmd, uint8_t *payload, uint16_t length);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); // Enable UART receive interrupt
+RingBuffer rx; 
 /* USER CODE END 0 */
 
 /**
@@ -94,6 +97,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_CRC_Init();
   /* USER CODE BEGIN 2 */
+  Parser_Init();
+  RingBuffer_Init(&rx);
+  __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE); // Enable UART receive interrupt
         for (int i = 0; i < 3; i++) {
         HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
         HAL_Delay(500);
@@ -250,7 +256,44 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void Protocol_SendResponse(uint8_t cmd, uint8_t *payload, uint16_t length)
+{
+  uint8_t tx_buffer[PROTOCOL_MAX_PAYLOAD_SIZE];
+  uint16_t idx =  0; 
 
+  // Header 
+  tx_buffer[idx++] = PROTOCOL_HEADER_1;
+  tx_buffer[idx++] = PROTOCOL_HEADER_2;
+
+  // Command 
+  tx_buffer[idx++] = cmd;
+
+  // Length
+  tx_buffer[idx++] = (length >> 8) & 0xFF; // High byte
+  tx_buffer[idx++] = length & 0xFF;        // Low byte
+
+  // Payload 
+  if(payload != NULL && length > 0) {
+      for(uint16_t i = 0; i < length; i++) {
+          tx_buffer[idx++] = payload[i];
+      }
+  }
+
+  // CRC32
+  CRC32_Reset();
+  uint32_t crc = (length > 0 ) ? CRC32_FeedData((uint8_t*)&tx_buffer[5], length) : 0xFFFFFFFF; // If no payload, CRC is 0xFFFFFFFF
+
+  tx_buffer[idx++] = (uint8_t)((crc >> 24 ) & 0xFF);
+  tx_buffer[idx++] = (uint8_t)((crc >> 16 ) & 0xFF);
+  tx_buffer[idx++] = (uint8_t)((crc >> 8 ) & 0xFF);
+  tx_buffer[idx++] = (uint8_t)(crc & 0xFF);
+  
+  //Tail 
+  tx_buffer[idx++] = PROTOCOL_TAIL;
+
+  HAL_UART_Transmit(&huart1, tx_buffer, idx, HAL_MAX_DELAY);
+
+}
 /* USER CODE END 4 */
 
 /**

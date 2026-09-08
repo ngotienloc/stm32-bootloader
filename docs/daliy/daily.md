@@ -26,4 +26,6 @@
 5. Cơ chế bảo vệ bộ nhớ: 
 - Muốn thao tác với flash cần mở khóa ( trong Unlock)
 
+6. Cơ chế đóng gói và gửi bản tin trong STM32 
+
 

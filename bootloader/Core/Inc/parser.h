@@ -18,3 +18,5 @@ void Parser_Init(void);
 bool Parser_ParseByte(uint8_t byte, Protocol_Packet_t *packet);
 
 #endif /* __PARSER_H */
+
+
