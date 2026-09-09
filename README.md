@@ -5,8 +5,11 @@
 [![Bus](https://img.shields.io/badge/Protocol-UART%20%2F%20Packet--Based-00599C)](https://en.wikipedia.org/wiki/Universal_asynchronous_receiver-transmitter)
 [![Language](https://img.shields.io/badge/Language-C%20%7C%20Python%20%7C%20C%2B%2B-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Design%20Complete%20%7C%20Implementation%20In%20Progress-yellow.svg)](#)
 
 A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM Cortex-M3) paired with an **ESP32-S3 Wireless Gateway**. This project enables reliable In-Application Programming (IAP) and Over-The-Air (OTA) firmware updates over a full-duplex UART interface (115200 - 921600 bps), eliminating the need for dedicated ST-Link/JTAG debuggers during field maintenance.
+
+> **Project Status:** 🚧 The architecture, memory map, and communication protocol below are fully specified and stable. Firmware and tooling implementation is in progress — module status is tracked per-directory in [§7 Directory Structure](#7-directory-structure). Contributions and issue reports are welcome.
 
 ---
 
@@ -27,8 +30,7 @@ A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM
 - [7. Directory Structure](#7-directory-structure)
 - [8. Getting Started & Build Guide](#8-getting-started--build-guide)
 - [9. Testing & Verification](#9-testing--verification)
-- [10. Roadmap](#10-roadmap)
-- [11. License & References](#11-license--references)
+- [10. License & References](#10-license--references)
 
 ---
 
@@ -94,12 +96,12 @@ The system decouples network communication and target execution:
 #### STM32F103 <-> ESP32-S3 Direct Connection
 | STM32 Pin | ESP32-S3 GPIO | Mode / Function | Description |
 |---|---|---|---|
-| **PA9 (USART1_TX)** | **GPIO 18 (UART_RX)** | Input | STM32 Transmit $\rightarrow$ ESP32-S3 Receive |
-| **PA10 (USART1_RX)**| **GPIO 17 (UART_TX)** | Output | STM32 Receive $\leftarrow$ ESP32-S3 Transmit |
+| **PA9 (USART1_TX)** | **GPIO 18 (UART_RX)** | Input | STM32 Transmit → ESP32-S3 Receive |
+| **PA10 (USART1_RX)**| **GPIO 17 (UART_TX)** | Output | STM32 Receive ← ESP32-S3 Transmit |
 | **3.3V** | **3.3V** | Power | Logic Level / Power Supply |
 | **GND** | **GND** | Ground | Common Ground (Mandatory) |
 | **NRST** *(Optional)* | **GPIO 16** | Open-Drain Out | ESP32-S3 controlled Active-Low Hardware Reset |
-| **PA0 (Emergency Pin)** *(Opt)* | **GPIO 15** | Push-Pull Out | Software-checked GPIO — forces custom bootloader to stay active (checked in bootloader code, distinct from physical `BOOT0`) |
+| **PA0 (Emergency Pin)** *(Optional)* | **GPIO 15** | Push-Pull Out | Software-checked GPIO — forces custom bootloader to stay active (checked in bootloader code, distinct from physical `BOOT0`) |
 | **PC13** | - | Output | On-board LED (Status Indicator) |
 
 > [!IMPORTANT]
@@ -111,7 +113,7 @@ The system decouples network communication and target execution:
 
 ## 4. Memory Map & Vector Table Relocation
 
-The STM32F103C8T6 internal 64 KB Flash memory (64 pages $\times$ 1 KB) is partitioned into three dedicated regions:
+The STM32F103C8T6 internal 64 KB Flash memory (64 pages × 1 KB) is partitioned into three dedicated regions:
 
 ```
 0x08000000 +-----------------------------------------------+
@@ -177,7 +179,7 @@ Before transferring execution to the user application, the bootloader performs a
 
 #### The Problem with Naive Raw Transmission (No Protection)
 In basic UART bootloader implementations, streaming raw `.bin` bytes directly ("read byte, write byte") introduces critical reliability issues:
-1. **EMI / Electrical Noise:** UART lines are susceptible to electrical interference, causing dropped or flipped bytes $\rightarrow$ STM32 silently writes corrupt data to Flash, bricking the device on boot.
+1. **EMI / Electrical Noise:** UART lines are susceptible to electrical interference, causing dropped or flipped bytes → STM32 silently writes corrupt data to Flash, bricking the device on boot.
 2. **Zero Feedback:** The transmitter (ESP32-S3/PC) cannot verify whether the STM32 received all bytes correctly or suffered buffer overrun.
 3. **No Granular Recovery:** If transmission fails midway, the system cannot identify where the fault occurred, forcing a complete restart from byte 0.
 
@@ -201,7 +203,7 @@ Instead of streaming an entire binary at once, firmware is split into small pack
 
 - **Header (`0xAA 0x55` / `START_BYTE`):** 2 synchronization bytes identifying frame start.
 - **Packet_ID / Command (`1 Byte`):** Operation command code (e.g. `0x03` = `CMD_WRITE_DATA`).
-- **Length (`2 Bytes`, Big-Endian):** Total byte length $N$ of the Payload field. For a `CMD_WRITE_DATA` frame carrying a 256-byte data chunk, $N = 4\text{B (Flash Offset)} + 256\text{B (Data Chunk)} = 260\text{ bytes}$ (`0x0104`).
+- **Length (`2 Bytes`, Big-Endian):** Total byte length N of the Payload field. For a `CMD_WRITE_DATA` frame carrying a 256-byte data chunk, N = 4 bytes (Flash Offset) + 256 bytes (Data Chunk) = 260 bytes (`0x0104`).
 - **Payload (`N Bytes`):**
   - `Bytes [0..3]`: Target Flash Memory Offset (`uint32_t`, Big-Endian) relative to `0x08004400`.
   - `Bytes [4..N-1]`: Raw firmware binary chunk data (e.g. 128B, 256B, or 512B).
@@ -218,18 +220,18 @@ Instead of streaming an entire binary at once, firmware is split into small pack
 
 Communication between ESP32-S3 (Sender) and STM32 (Receiver) follows a strict synchronous handshake:
 
-1. **ESP32-S3 transmits Packet $N$:** Chunks 256 bytes (Payload length = 260B) with 4-byte CRC32.
+1. **ESP32-S3 transmits Packet N:** Chunks 256 bytes (Payload length = 260B) with 4-byte CRC32.
 2. **STM32 validates packet:** Computes CRC32 over received payload and compares with the frame's CRC32 field.
 3. **Case 1 — CRC Match (Integrity OK):**
    - STM32 commits data / accumulates running CRC.
    - STM32 replies with **`ACK`** (`0x06` / `RESP_WRITE_ACK 0x00`).
-   - ESP32-S3 proceeds to transmit Packet $N+1$.
+   - ESP32-S3 proceeds to transmit Packet N+1.
 4. **Case 2 — CRC Mismatch (Noise Detected):**
    - STM32 discards the packet (no flash write / no running CRC corruption).
    - STM32 replies with **`NACK`** (`0x15` / `RESP_WRITE_ACK 0x01`).
-   - ESP32-S3 **retransmits only Packet $N$** (no full restart needed).
+   - ESP32-S3 **retransmits only Packet N** (no full restart needed).
 5. **Case 3 — Lost Packet / Per-Packet Timeout:**
-   - If ESP32-S3 receives no `ACK`/`NACK` within **500 ms (Per-Packet Timeout)**, it automatically retransmits Packet $N$.
+   - If ESP32-S3 receives no `ACK`/`NACK` within **500 ms (Per-Packet Timeout)**, it automatically retransmits Packet N.
    - Retries up to **3 times** before aborting and reporting an unrecoverable link error.
 
 > [!NOTE]
@@ -271,19 +273,19 @@ sequenceDiagram
 
 | Command Code | Name | Direction | Description |
 |---|---|---|---|
-| `0x00` | `CMD_START_UPDATE` | ESP32-S3 $\rightarrow$ STM32 | Send `Total Firmware Size [4B]` + `Total Expected CRC32 [4B]` to initialize update session |
-| `0x80` | `RESP_START_ACK` | STM32 $\rightarrow$ ESP32-S3 | Target acknowledges session init & signals readiness for Stage 1 pre-verification |
-| `0x01` | `CMD_PING` | ESP32-S3 $\rightarrow$ STM32 | Query target MCU status & active mode (Bootloader / App) |
-| `0x81` | `RESP_PONG` | STM32 $\rightarrow$ ESP32-S3 | Target responds with status & bootloader version |
-| `0x02` | `CMD_ERASE` | ESP32-S3 $\rightarrow$ STM32 | **Part of the main update flow.** Sent once, after Stage 1 verification succeeds, to request bulk erase of the application flash pages (`0x08004400`..`0x08010000`) before Stage 3 write begins. Also usable standalone for manual/CLI recovery erase. |
-| `0x82` | `RESP_ERASE` | STM32 $\rightarrow$ ESP32-S3 | Flash erase result (`0x00`: Success, `0x01`: Error). Sent only after the bulk erase physically completes. |
-| `0x03` | `CMD_WRITE_DATA` | ESP32-S3 $\rightarrow$ STM32 | Binary chunk (`Flash Offset [4B]` + `Length [2B]` + `Chunk Data [NB]`) |
-| `0x83` | `RESP_WRITE_ACK` | STM32 $\rightarrow$ ESP32-S3 | Chunk write acknowledgment (`0x00`: ACK, `0x01`: NACK CRC, `0x02`: Flash Error) |
-| `0x04` | `CMD_VERIFY_CRC` | ESP32-S3 $\rightarrow$ STM32 | Trigger full hardware CRC32 readback verification on programmed Flash |
-| `0x84` | `RESP_VERIFY` | STM32 $\rightarrow$ ESP32-S3 | Image verification result (`0x00`: MATCH_OK, `0x01`: MISMATCH) |
-| `0x05` | `CMD_JUMP_APP` | ESP32-S3 $\rightarrow$ STM32 | Command bootloader to branch to Application (`0x08004400`) |
-| `0x06` | `CMD_END_PASS1` | ESP32-S3 $\rightarrow$ STM32 | Explicitly signal end of Stage 1 stream; requests STM32 to evaluate accumulated running CRC32 |
-| `0x86` | `RESP_PASS1_RESULT` | STM32 $\rightarrow$ ESP32-S3 | Stage 1 validation result (`0x00`: MATCH — proceed to Stage 2 erase; `0x01`: MISMATCH — abort & reset) |
+| `0x00` | `CMD_START_UPDATE` | ESP32-S3 → STM32 | Send `Total Firmware Size [4B]` + `Total Expected CRC32 [4B]` to initialize update session |
+| `0x80` | `RESP_START_ACK` | STM32 → ESP32-S3 | Target acknowledges session init & signals readiness for Stage 1 pre-verification |
+| `0x01` | `CMD_PING` | ESP32-S3 → STM32 | Query target MCU status & active mode (Bootloader / App) |
+| `0x81` | `RESP_PONG` | STM32 → ESP32-S3 | Target responds with status & bootloader version |
+| `0x02` | `CMD_ERASE` | ESP32-S3 → STM32 | **Part of the main update flow.** Sent once, after Stage 1 verification succeeds, to request bulk erase of the application flash pages (`0x08004400`..`0x08010000`) before Stage 3 write begins. Also usable standalone for manual/CLI recovery erase. |
+| `0x82` | `RESP_ERASE` | STM32 → ESP32-S3 | Flash erase result (`0x00`: Success, `0x01`: Error). Sent only after the bulk erase physically completes. |
+| `0x03` | `CMD_WRITE_DATA` | ESP32-S3 → STM32 | Binary chunk (`Flash Offset [4B]` + `Length [2B]` + `Chunk Data [NB]`) |
+| `0x83` | `RESP_WRITE_ACK` | STM32 → ESP32-S3 | Chunk write acknowledgment (`0x00`: ACK, `0x01`: NACK CRC, `0x02`: Flash Error) |
+| `0x04` | `CMD_VERIFY_CRC` | ESP32-S3 → STM32 | Trigger full hardware CRC32 readback verification on programmed Flash |
+| `0x84` | `RESP_VERIFY` | STM32 → ESP32-S3 | Image verification result (`0x00`: MATCH_OK, `0x01`: MISMATCH) |
+| `0x05` | `CMD_JUMP_APP` | ESP32-S3 → STM32 | Command bootloader to branch to Application (`0x08004400`) |
+| `0x06` | `CMD_END_PASS1` | ESP32-S3 → STM32 | Explicitly signal end of Stage 1 stream; requests STM32 to evaluate accumulated running CRC32 |
+| `0x86` | `RESP_PASS1_RESULT` | STM32 → ESP32-S3 | Stage 1 validation result (`0x00`: MATCH — proceed to Stage 2 erase; `0x01`: MISMATCH — abort & reset) |
 
 ---
 
@@ -325,7 +327,7 @@ Due to STM32F103's limited 20 KB SRAM, buffering an entire 40–47 KB applicatio
    - For each packet received, STM32 validates frame-level CRC32. **Only the raw firmware data chunk** (`Bytes [4..N-1]`, excluding the 4-byte Flash Offset header) is sequentially fed into the **STM32 Hardware CRC32 Unit** (`CRC->DR`), accumulating a continuous running CRC32. **No flash pages are erased or written during Stage 1.**
    - Once all Stage 1 packets are transmitted, ESP32-S3 sends **`CMD_END_PASS1` (`0x06`)** to explicitly delimit stream completion.
    - STM32 compares the accumulated hardware CRC32 with `Total Expected CRC32` and replies with **`RESP_PASS1_RESULT` (`0x86`)**:
-     - `0x00 (MATCH)`: STM32 transitions internal state to *Ready to Erase* $\rightarrow$ ESP32-S3 proceeds to Stage 2.
+     - `0x00 (MATCH)`: STM32 transitions internal state to *Ready to Erase* → ESP32-S3 proceeds to Stage 2.
      - `0x01 (MISMATCH)`: STM32 resets CRC engine and aborts update session.
 
    > [!NOTE]
@@ -339,10 +341,10 @@ Due to STM32F103's limited 20 KB SRAM, buffering an entire 40–47 KB applicatio
 4. **Stage 3 — Atomic Flash Write with Metadata State Tracking:**
    - ESP32-S3 re-streams the binary chunks directly from its local SPIFFS/LittleFS cache (**no user re-upload needed**).
    - Stage 3 reuses the same `CMD_WRITE_DATA` (`0x03`) / `RESP_WRITE_ACK` (`0x83`) handshake as Stage 1, but this time each verified chunk is committed to Flash memory (already erased in Stage 2) instead of being CRC-only validated.
-   - After all chunks are written, STM32 performs a full readback hardware CRC32 check across the newly flashed application region. Upon match $\rightarrow$ STM32 clears the Metadata state flag to `COMPLETED` (`0x00`).
+   - After all chunks are written, STM32 performs a full readback hardware CRC32 check across the newly flashed application region. Upon match → STM32 clears the Metadata state flag to `COMPLETED` (`0x00`).
 5. **Automatic Power-Loss Recovery:**
-   - If power drops mid-write during Stage 3 $\rightarrow$ On reboot, the Bootloader reads the Metadata sector and detects `FLAG == IN_PROGRESS`.
-   - Bootloader knows the User Application is incomplete/corrupted $\rightarrow$ **Refuses to branch to App**, blinks `PC13` LED / transmits UART failure logs, and safely remains in Bootloader standby waiting for ESP32-S3 to reflash.
+   - If power drops mid-write during Stage 3 → On reboot, the Bootloader reads the Metadata sector and detects `FLAG == IN_PROGRESS`.
+   - Bootloader knows the User Application is incomplete/corrupted → **Refuses to branch to App**, blinks `PC13` LED / transmits UART failure logs, and safely remains in Bootloader standby waiting for ESP32-S3 to reflash.
    - If power drops mid-erase during Stage 2, the same `IN_PROGRESS` flag (already written before erase begins) equally forces the bootloader to stay in recovery mode, so no gap in protection exists across stage boundaries.
 
 ### 6.2 Additional Safety Guards
@@ -350,7 +352,7 @@ Due to STM32F103's limited 20 KB SRAM, buffering an entire 40–47 KB applicatio
 - **Emergency Software Boot Pin (`PA0`):** Pulling `PA0` low during reset forces custom bootloader execution regardless of flash state (evaluated in software, distinct from physical `BOOT0`).
 - **Multi-Level Timeout Guard:**
   - **Per-Packet Timeout (500 ms):** Applies to `CMD_WRITE_DATA`, `CMD_PING`, `CMD_VERIFY_CRC`, and `CMD_JUMP_APP` exchanges; ESP32-S3 retries up to 3 times on expiry.
-  - **Erase Timeout (3000 ms):** Applies exclusively to the `CMD_ERASE` $\rightarrow$ `RESP_ERASE` exchange in Stage 2, sized to comfortably exceed the worst-case ~1–2 s bulk-erase duration for 47 pages.
+  - **Erase Timeout (3000 ms):** Applies exclusively to the `CMD_ERASE` → `RESP_ERASE` exchange in Stage 2, sized to comfortably exceed the worst-case ~1–2 s bulk-erase duration for 47 pages.
   - **Session Inactivity Timeout (5000 ms):** Triggered if communication stalls completely for 5 seconds at any stage; STM32 resets its internal state machine back to `IDLE` standby.
 
 ---
@@ -360,6 +362,8 @@ Due to STM32F103's limited 20 KB SRAM, buffering an entire 40–47 KB applicatio
 ```
 stm32-bootloader/
 ├── README.md                          # Project overview & documentation
+├── LICENSE                            # MIT License
+├── .gitignore                         # Build artifacts / toolchain exclusions
 ├── docs/                              # Detailed specifications & schematics
 │   ├── protocol_spec.md               # UART protocol framing & packet format
 │   ├── hardware_schematic.png         # Wiring diagrams & pinouts
@@ -394,6 +398,9 @@ stm32-bootloader/
     ├── bin_checksum_patcher.py        # Pre-process binary, inject CRC32 header
     └── requirements.txt               # Python dependencies (pyserial)
 ```
+
+> [!NOTE]
+> This tree reflects the **planned** repository layout. Some files (e.g., `docs/hardware_schematic.png`, source files under `bootloader/` and `gateway_esp32/`) are still being implemented — see the status note at the top of this document. Update this section as modules land.
 
 ---
 
@@ -446,23 +453,9 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ---
 
-## 10. Roadmap
+## 10. License & References
 
-- [x] Initial Architecture & Memory Map Design
-- [ ] G0: Hardware verification (Direct UART loopback & Pin verification)
-- [ ] G1: Minimal UART-based Bootloader with Flash write & Jump logic
-- [ ] G2: Packet framing protocol with CRC32 & ACK/NACK
-- [ ] G2.1: Host-side & ESP32-S3 CRC validation (match STM32 hardware CRC-32/MPEG-2 non-reflected variant)
-- [ ] G3: Python flashing tool (`uart_uploader.py`)
-- [ ] G4: ESP32-S3 Gateway firmware (Web OTA / SPIFFS Cache / Serial Forwarding)
-- [ ] G5: Hardening against power drop & 3-stage rollback protection (Pre-Verify / Erase / Write)
-- [ ] G6: Web UI Dashboard on ESP32-S3 & OLED status display
-
----
-
-## 11. License & References
-
-- **License:** Distributed under the MIT License. See `LICENSE` for details.
+- **License:** Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 - **References:**
   - STM32F103xC/D/E Reference Manual (*RM0008*) — Flash Memory Controller & USART.
   - ST AN2606: *STM32 microcontroller system memory boot mode*.
