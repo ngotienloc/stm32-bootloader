@@ -4,7 +4,6 @@
 [![Gateway ESP32-S3](https://img.shields.io/badge/Gateway-ESP32--S3%20(Xtensa%20Dual--Core)-E7352C?logo=espressif)](https://www.espressif.com)
 [![Bus](https://img.shields.io/badge/Protocol-UART%20%2F%20Packet--Based-00599C)](https://en.wikipedia.org/wiki/Universal_asynchronous_receiver-transmitter)
 [![Language](https://img.shields.io/badge/Language-C%20%7C%20Python%20%7C%20C%2B%2B-blue.svg)](https://en.wikipedia.org/wiki/C_(programming_language))
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Design%20Complete%20%7C%20Implementation%20In%20Progress-yellow.svg)](#)
 
 A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM Cortex-M3) paired with an **ESP32-S3 Wireless Gateway**. This project enables reliable In-Application Programming (IAP) and Over-The-Air (OTA) firmware updates over a full-duplex UART interface (115200 - 921600 bps), eliminating the need for dedicated ST-Link/JTAG debuggers during field maintenance.
@@ -30,7 +29,7 @@ A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM
 - [7. Directory Structure](#7-directory-structure)
 - [8. Getting Started & Build Guide](#8-getting-started--build-guide)
 - [9. Testing & Verification](#9-testing--verification)
-- [10. License & References](#10-license--references)
+- [10. References](#10-references)
 
 ---
 
@@ -362,7 +361,6 @@ Due to STM32F103's limited 20 KB SRAM, buffering an entire 40–47 KB applicatio
 ```
 stm32-bootloader/
 ├── README.md                          # Project overview & documentation
-├── LICENSE                            # MIT License
 ├── .gitignore                         # Build artifacts / toolchain exclusions
 ├── docs/                              # Detailed specifications & schematics
 │   ├── protocol_spec.md               # UART protocol framing & packet format
@@ -453,10 +451,8 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ---
 
-## 10. License & References
+## 10. References
 
-- **License:** Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
-- **References:**
-  - STM32F103xC/D/E Reference Manual (*RM0008*) — Flash Memory Controller & USART.
-  - ST AN2606: *STM32 microcontroller system memory boot mode*.
-  - ST AN3155: *USART protocol used in the STM32 bootloader*.
+- STM32F103xC/D/E Reference Manual (*RM0008*) — Flash Memory Controller & USART.
+- ST AN2606: *STM32 microcontroller system memory boot mode*.
+- ST AN3155: *USART protocol used in the STM32 bootloader*.
