@@ -16,6 +16,7 @@ A robust, production-grade custom **UART Bootloader** for **STM32F103C8T6** (ARM
 - [1. System Architecture](#1-system-architecture)
 - [2. Key Features](#2-key-features)
 - [3. Hardware Specifications & Pinout](#3-hardware-specifications--pinout)
+  - [3.3 PCB Images](#33-pcb-images)
 - [4. Memory Map & Vector Table Relocation](#4-memory-map--vector-table-relocation)
 - [5. UART Communication & Flashing Protocol (Packet CRC32 + ACK/NACK)](#5-uart-communication--flashing-protocol-packet-crc32--acknack)
   - [5.1 Protocol Design Rationale: Raw vs. Protected Framing](#51-protocol-design-rationale-raw-transmission-vs-protected-framing)
@@ -107,6 +108,29 @@ The system decouples network communication and target execution:
 > - Both STM32 and ESP32-S3 operate at **3.3V logic levels**.
 > - The ESP32-S3 must drive the STM32 `NRST` pin in **Open-Drain mode** (pulled low to assert reset, floating / High-Z to release) to avoid conflicting with the STM32 internal pull-up resistor (~40 kΩ) and reset capacitor.
 > - **PA0 vs BOOT0:** `PA0` is a general-purpose GPIO checked by custom bootloader software logic upon startup. It is completely independent of the hardware `BOOT0` pin (which boots into ST system ROM factory bootloader when pulled HIGH).
+
+### 3.3 PCB Images
+
+<p align="center">
+  <img src="images/pcb1.png" alt="STM32-ESP32 Gateway PCB - Top View" width="45%" />
+  <img src="images/pcb2.png" alt="STM32-ESP32 Gateway PCB - Bottom View" width="45%" />
+</p>
+
+<p align="center">
+  <em>Hình 1 (trái): Mặt trên PCB gateway STM32F103 ↔ ESP32-S3, thể hiện bố trí UART, nguồn 3.3V và các chân NRST/PA0.</em><br/>
+  <em>Hình 2 (phải): Mặt dưới PCB / góc chụp bổ sung, phục vụ đối chiếu layout với bảng chân cắm ở mục 3.2.</em>
+</p>
+
+> [!NOTE]
+> Thay nội dung `alt` và chú thích phía trên cho khớp với thực tế ảnh của bạn (ví dụ: mặt trước/sau, phiên bản revision, ngày chụp...). Nếu muốn ảnh hiển thị full-width thay vì cạnh nhau, có thể thay khối trên bằng cú pháp Markdown thuần:
+>
+> ```markdown
+> ![STM32-ESP32 Gateway PCB - Top View](images/pcb1.png)
+> *Hình 1: Mặt trên PCB gateway STM32F103 ↔ ESP32-S3.*
+>
+> ![STM32-ESP32 Gateway PCB - Bottom View](images/pcb2.png)
+> *Hình 2: Mặt dưới PCB gateway.*
+> ```
 
 ---
 
@@ -366,6 +390,9 @@ stm32-bootloader/
 │   ├── protocol_spec.md               # UART protocol framing & packet format
 │   ├── hardware_schematic.png         # Wiring diagrams & pinouts
 │   └── memory_layout.md               # Flash sector & linker configuration details
+├── images/                            # PCB photos referenced in README (§3.3)
+│   ├── pcb1.png                       # PCB - top view
+│   └── pcb2.png                       # PCB - bottom view / alternate angle
 ├── bootloader/                        # STM32 Bootloader Firmware (Target)
 │   ├── Core/
 │   │   ├── Inc/
