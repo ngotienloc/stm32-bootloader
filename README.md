@@ -117,19 +117,19 @@ The system decouples network communication and target execution:
 </p>
 
 <p align="center">
-  <em>Hình 1 (trái): Mặt trên PCB gateway STM32F103 ↔ ESP32-S3, thể hiện bố trí UART, nguồn 3.3V và các chân NRST/PA0.</em><br/>
-  <em>Hình 2 (phải): Mặt dưới PCB / góc chụp bổ sung, phục vụ đối chiếu layout với bảng chân cắm ở mục 3.2.</em>
+  <em>Figure 1 (left): Top view of the STM32F103 ↔ ESP32-S3 gateway PCB, showing UART, 3.3V power, and NRST/PA0 pin placement.</em><br/>
+  <em>Figure 2 (right): Bottom view / secondary angle of the PCB, for cross-referencing the layout against the pinout table in §3.2.</em>
 </p>
 
 > [!NOTE]
-> Thay nội dung `alt` và chú thích phía trên cho khớp với thực tế ảnh của bạn (ví dụ: mặt trước/sau, phiên bản revision, ngày chụp...). Nếu muốn ảnh hiển thị full-width thay vì cạnh nhau, có thể thay khối trên bằng cú pháp Markdown thuần:
+> Update the `alt` text and captions above to match your actual photos (e.g. front/back, revision number, date taken...). If you'd rather stack the images full-width instead of side by side, replace the block above with plain Markdown syntax:
 >
 > ```markdown
 > ![STM32-ESP32 Gateway PCB - Top View](images/pcb1.png)
-> *Hình 1: Mặt trên PCB gateway STM32F103 ↔ ESP32-S3.*
+> *Figure 1: Top view of the STM32F103 ↔ ESP32-S3 gateway PCB.*
 >
 > ![STM32-ESP32 Gateway PCB - Bottom View](images/pcb2.png)
-> *Hình 2: Mặt dưới PCB gateway.*
+> *Figure 2: Bottom view of the gateway PCB.*
 > ```
 
 ---
